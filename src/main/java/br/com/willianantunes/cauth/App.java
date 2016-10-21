@@ -1,5 +1,8 @@
 package br.com.willianantunes.cauth;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -8,12 +11,15 @@ import java.net.URISyntaxException;
 import java.net.URL;
 import java.nio.file.Paths;
 import java.security.KeyManagementException;
+import java.security.KeyStore;
+import java.security.KeyStoreException;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
+import java.security.UnrecoverableKeyException;
+import java.security.cert.CertificateException;
 import java.security.cert.X509Certificate;
 
 import javax.net.ssl.HttpsURLConnection;
-import javax.net.ssl.KeyManager;
 import javax.net.ssl.KeyManagerFactory;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSession;
@@ -47,12 +53,11 @@ import org.xml.sax.SAXException;
  */
 public class App {
     public static void main( String[] args ) throws URISyntaxException, NoSuchAlgorithmException, KeyManagementException {
-		String keystorePath = Paths.get(ClassLoader.getSystemResource("keystore.jks").toURI()).toFile().getAbsolutePath();
-		
-		System.setProperty("javax.net.debug", "all");
-		System.setProperty("javax.net.ssl.keyStore", keystorePath);
-		System.setProperty("javax.net.ssl.keyStorePassword","qwerty321");
-		System.setProperty("javax.net.ssl.keyStoreType","PKCS12");
+    	String myKeyStoreFile = "keystore.p12";
+    	String myKeyStorePassword = "qwerty321";
+    	String protocol = "TLS";
+    	
+		String keystorePath = Paths.get(ClassLoader.getSystemResource(myKeyStoreFile).toURI()).toFile().getAbsolutePath();
 
 		// Create a trust manager that does not validate certificate chains
 		TrustManager[] trustAllCerts = new TrustManager[] {
@@ -61,21 +66,21 @@ public class App {
 			        public void checkClientTrusted(X509Certificate[] certs, String authType) { } 
 			        public void checkServerTrusted(X509Certificate[] certs, String authType) { }
 			    } 
-			}; 
-		
-		// Install the all-trusting trust manager
-	    SSLContext sc = SSLContext.getInstance("SSL");
-	    KeyManagerFactory kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm());
-	    sc.init(null, trustAllCerts, new SecureRandom()); 
+			};  
 	    
 	    try {
 	    	String myUrl = "https://your-test-server.com.br";
 	    	URL url = new URL(myUrl);
+	    	
 		    // Disable hostname verification, otherwise you may get CertificateException for "No name matching my.test.com.br found"
-		    HttpsURLConnection.setDefaultHostnameVerifier((String hostname, SSLSession session) -> true);
-		    
+		    HttpsURLConnection.setDefaultHostnameVerifier((String hostname, SSLSession session) -> true);		    
 		    HttpsURLConnection conn = (HttpsURLConnection)url.openConnection();
-		    conn.setSSLSocketFactory(sc.getSocketFactory());
+		    
+		    // If you want to ignore invalid certificates
+		    conn.setSSLSocketFactory(getFactory(new File(keystorePath), myKeyStorePassword, trustAllCerts, protocol));
+		    // Common usage
+		    // conn.setSSLSocketFactory(getFactory(new File(keystorePath), myKeyStorePassword, null, protocol));
+		    
 		    InputStream inputstream = conn.getInputStream();
 		    String result = IOUtils.toString(inputstream);
 		   
@@ -83,13 +88,39 @@ public class App {
 		    DocumentBuilderFactory documentBuilderFactory = DocumentBuilderFactory.newInstance();
 		    DocumentBuilder documentBuilder = documentBuilderFactory.newDocumentBuilder();
 		    Document document = documentBuilder.parse(new InputSource(new StringReader(result)));
-		    pretty(document, System.out, 2);		    
-	    } catch(IOException | SAXException | ParserConfigurationException | TransformerException e) {
-	    	e.printStackTrace();
-	    }
-    }
-    
-    private static void pretty(Document document, OutputStream outputStream, int indent) throws TransformerException {
+			pretty(document, System.out, 2);
+		} catch (IOException | SAXException | ParserConfigurationException | TransformerException e) {
+			e.printStackTrace();
+		}
+	}
+
+    /**
+     * Create a SSL socket factory by the provided keystore and password.
+     * @see <a href="http://vafer.org/blog/20061010073725/">Client cert authentication with java</a>
+     */
+	private static SSLSocketFactory getFactory(File pKeyFile, String pKeyPassword, TrustManager[] trustedCerts, String protocol) {
+		SSLContext context = null;
+		
+		try {
+			KeyManagerFactory keyManagerFactory = KeyManagerFactory.getInstance("SunX509");
+			KeyStore keyStore = KeyStore.getInstance("PKCS12");
+
+			InputStream keyInput = new FileInputStream(pKeyFile);
+			keyStore.load(keyInput, pKeyPassword.toCharArray());
+			keyInput.close();
+
+			keyManagerFactory.init(keyStore, pKeyPassword.toCharArray());
+
+			context = SSLContext.getInstance(protocol); // You can pass TLS for example 
+			context.init(keyManagerFactory.getKeyManagers(), trustedCerts, new SecureRandom());
+		} catch (Exception e) {
+			throw new RuntimeException(e);
+		}
+
+		return context.getSocketFactory();
+	}
+
+	private static void pretty(Document document, OutputStream outputStream, int indent) throws TransformerException {
         TransformerFactory transformerFactory = TransformerFactory.newInstance();
         Transformer transformer = transformerFactory.newTransformer();
         transformer.setOutputProperty(OutputKeys.ENCODING, "UTF-8");
